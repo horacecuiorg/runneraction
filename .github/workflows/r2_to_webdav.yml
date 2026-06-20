@@ -119,7 +119,7 @@ jobs:
           else
             echo "Copying from $SOURCE_PATH to $DEST_PATH" >> "$RUN_LOG"
             # Run the copy command
-            "$RCLONE_BIN" --config rclone.conf copy "$SOURCE_PATH" "$DEST_PATH" --checksum >> "$RUN_LOG" 2>&1
+            "$RCLONE_BIN" --config rclone.conf copy "$SOURCE_PATH" "$DEST_PATH" --update >> "$RUN_LOG" 2>&1
             
             if [ $? -eq 0 ]; then
               echo "Rclone copy completed successfully." >> "$RUN_LOG"
