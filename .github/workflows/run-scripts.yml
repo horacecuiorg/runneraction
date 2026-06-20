@@ -22,11 +22,50 @@ jobs:
             pip3 install -r scripts/requirements.txt
           fi
 
+      # Step 3.5: Vault SSL Diagnostics
+      - name: Vault SSL Diagnostics
+        env:
+          VAULT_URL: ${{ secrets.VAULT_URL }}
+        run: |
+          if [ -z "$VAULT_URL" ]; then
+            echo "VAULT_URL is not set. Skipping diagnostics."
+            exit 0
+          fi
+          # Extract host:port from VAULT_URL
+          VAULT_HOST=$(echo "$VAULT_URL" | sed -e 's|https://||' -e 's|http://||' -e 's|/.*||')
+          if [[ "$VAULT_URL" =~ https:// ]]; then
+            if [[ ! "$VAULT_HOST" =~ : ]]; then
+              VAULT_HOST="$VAULT_HOST:443"
+            fi
+          else
+            if [[ ! "$VAULT_HOST" =~ : ]]; then
+              VAULT_HOST="$VAULT_HOST:80"
+            fi
+          fi
+          PURE_HOST=$(echo "$VAULT_HOST" | cut -d: -f1)
+          PORT=$(echo "$VAULT_HOST" | cut -d: -f2)
+          
+          echo "Target Host: $PURE_HOST"
+          echo "Target Port: $PORT"
+          
+          echo "=== DNS Resolution ==="
+          nslookup "$PURE_HOST" || host "$PURE_HOST" || echo "DNS lookup tool not found"
+          
+          echo "=== SSL Connection Check ==="
+          if [[ "$VAULT_URL" =~ https:// ]]; then
+            openssl s_client -connect "$PURE_HOST:$PORT" -servername "$PURE_HOST" < /dev/null 2>&1 | head -n 40
+            echo "=== Certificate Subject and SANs ==="
+            openssl s_client -connect "$PURE_HOST:$PORT" -servername "$PURE_HOST" < /dev/null 2>/dev/null | openssl x509 -noout -text | grep -E "Subject:|DNS:" || echo "Failed to read certificate"
+          else
+            echo "HTTP endpoint detected, skipping SSL checks."
+          fi
+
       # Step 4: Run Python Script (Read KV path)
       - name: Run Vault helper script (Read KV path)
         env:
           VAULT_URL: ${{ secrets.VAULT_URL }}
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          VAULT_SKIP_VERIFY: "true"
         run: |
           python3 scripts/read_vault.py -p /v1/kv/data/kvtest1
 

@@ -4,10 +4,16 @@ import json
 import os
 import sys
 import requests
+import urllib3
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Suppress SSL warnings if verification is skipped
+if os.getenv("VAULT_SKIP_VERIFY", "false").lower() == "true":
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 # ==========================================
 # Custom Exception Classes for Vault Errors
@@ -78,7 +84,9 @@ def read_vault_key(path: str, key_name: str = None) -> str:
     }
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        skip_verify = os.getenv("VAULT_SKIP_VERIFY", "false").lower() == "true"
+        response = requests.get(url, headers=headers, timeout=10, verify=not skip_verify)
+
         
         # Handle HTTP status codes specifically
         if response.status_code in (401, 403):

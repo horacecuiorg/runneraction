@@ -27,6 +27,7 @@ jobs:
         env:
           VAULT_URL: ${{ secrets.VAULT_URL }}
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          VAULT_SKIP_VERIFY: "true"
         run: |
           echo "=== Fetching Telegram credentials from Vault ===" >> run.log
           GIT_PUSH_BOT=$(python3 scripts/read_vault.py -p /v1/kv/data/github -k GIT_PUSH_BOT 2>> run.log)
