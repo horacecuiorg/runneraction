@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Suppress SSL warnings if verification is skipped
-if os.getenv("VAULT_SKIP_VERIFY", "false").lower() == "true":
+if os.getenv("VAULT_SKIP_VERIFY", "false").strip().lower() == "true":
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -89,7 +89,7 @@ def read_vault_key(path: str, key_name: str = None) -> str:
     }
 
     try:
-        skip_verify = os.getenv("VAULT_SKIP_VERIFY", "false").lower() == "true"
+        skip_verify = os.getenv("VAULT_SKIP_VERIFY", "false").strip().lower() == "true"
         response = requests.get(url, headers=headers, timeout=10, verify=not skip_verify)
 
         
