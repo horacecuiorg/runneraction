@@ -24,6 +24,7 @@ jobs:
 
       # Step 3: Fetch DNS Credentials from Vault
       - name: Fetch DNS Credentials from Vault
+        if: always()
         env:
           VAULT_URL: ${{ secrets.VAULT_URL }}
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
@@ -47,12 +48,14 @@ jobs:
 
       # Step 4: Show list_dns_records
       - name: Show list_dns_records
+        if: always()
         run: |
           echo "=== Running list_dns_records.py ===" >> run.log
           python3 scripts/list_dns_records.py ${CF_DNS_API} ${CF_ZONE_CS} >> run.log 2>&1
 
       # Step 5: Fetch Telegram Credentials from Vault
       - name: Fetch Telegram Credentials from Vault
+        if: always()
         env:
           VAULT_URL: ${{ secrets.VAULT_URL }}
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
@@ -76,6 +79,7 @@ jobs:
 
       # Step 6: Send log to Telegram
       - name: Send log to Telegram
+        if: always()
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ env.GIT_PUSH_BOT }}/sendDocument" \
             -F "chat_id=${{ env.MY_TEL_ID }}" \

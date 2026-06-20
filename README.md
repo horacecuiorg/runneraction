@@ -95,4 +95,6 @@ runneraction/
 2. **逻辑编写位置**: 新增的具体业务逻辑和执行脚本，**必须**编写在 `Checkout the repository code` (检出仓库代码) 与 `Fetch Telegram Credentials from Vault` (从 Vault 获取 Telegram 凭据) 这两个步骤之间。
 3. **日志输出与重定向**: 中间所有步骤的执行/运行日志（包括标准输出与标准错误）都必须写入/追加到 `run.log` 文件中（例如使用 `>> run.log 2>&1`），以便最终步骤可以将完整的 `run.log` 作为附件发送出去。
 4. **脚本化执行**: 中间步骤尽量使用直接编写脚本/命令行的方式（如 `run: | ...`）来执行，避免过多依赖外部第三方 Action。
+5. **失败时依然向下执行并发送日志**: 无论中间任何步骤（如依赖安装、凭据获取、业务执行等）是否失败，后续步骤都**必须**继续向下执行，直至最后的 `Fetch Telegram Credentials from Vault` 和 `Send log to Telegram` 步骤，以确保无论发生什么错误，运行日志都能完整发送。这应当通过在除 Checkout 之外的所有后续步骤中加入 `if: always()` 来实现。
+
 
