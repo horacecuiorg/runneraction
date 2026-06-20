@@ -31,10 +31,10 @@ jobs:
         run: |
           echo "=== Fetching DNS credentials from Vault ===" >> run.log
           cf_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/cf 2>> run.log)
-          CF_DNS_API=$(echo "$cf_secrets" | jq -r '.CF_DNS_API')
-          CF_ZONE_CS=$(echo "$cf_secrets" | jq -r '.CF_ZONE_CS')
+          CF_DNS_API=$(echo "$cf_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('CF_DNS_API', ''))" 2>/dev/null)
+          CF_ZONE_CS=$(echo "$cf_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('CF_ZONE_CS', ''))" 2>/dev/null)
 
-          if [ -n "$CF_DNS_API" ] && [ "$CF_DNS_API" != "null" ] && [ -n "$CF_ZONE_CS" ] && [ "$CF_ZONE_CS" != "null" ]; then
+          if [ -n "$CF_DNS_API" ] && [ -n "$CF_ZONE_CS" ]; then
             echo "Successfully fetched credentials from Vault." >> run.log
           else
             echo "Failed to fetch credentials from Vault." >> run.log
@@ -62,10 +62,10 @@ jobs:
         run: |
           echo "=== Fetching Telegram credentials from Vault ===" >> run.log
           github_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/github 2>> run.log)
-          GIT_PUSH_BOT=$(echo "$github_secrets" | jq -r '.GIT_PUSH_BOT')
-          MY_TEL_ID=$(echo "$github_secrets" | jq -r '.MY_TEL_ID')
+          GIT_PUSH_BOT=$(echo "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('GIT_PUSH_BOT', ''))" 2>/dev/null)
+          MY_TEL_ID=$(echo "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('MY_TEL_ID', ''))" 2>/dev/null)
           
-          if [ -n "$GIT_PUSH_BOT" ] && [ "$GIT_PUSH_BOT" != "null" ] && [ -n "$MY_TEL_ID" ] && [ "$MY_TEL_ID" != "null" ]; then
+          if [ -n "$GIT_PUSH_BOT" ] && [ -n "$MY_TEL_ID" ]; then
             echo "Successfully fetched credentials from Vault." >> run.log
           else
             echo "Failed to fetch credentials from Vault." >> run.log
