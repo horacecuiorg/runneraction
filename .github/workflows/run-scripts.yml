@@ -2,6 +2,11 @@ name: Run Automation Scripts
 
 on:
   workflow_dispatch:
+    inputs:
+      vault_skip_verify:
+        description: 'Skip Vault SSL verification (true/false)'
+        required: false
+        default: 'false'
 
 jobs:
   run-scripts:
@@ -67,7 +72,7 @@ jobs:
         env:
           VAULT_URL: ${{ secrets.VAULT_URL }}
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
-          VAULT_SKIP_VERIFY: "true"
+          VAULT_SKIP_VERIFY: ${{ github.event.inputs.vault_skip_verify || 'false' }}
         run: |
           python3 scripts/read_vault.py -p /v1/kv/data/kvtest1
 
