@@ -24,13 +24,15 @@ jobs:
 
       # Step 3: Fetch Telegram Credentials from Vault
       - name: Fetch Telegram Credentials from Vault
+        if: always()
         env:
           VAULT_URL: ${{ secrets.VAULT_URL }}
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
         run: |
           echo "=== Fetching Telegram credentials from Vault ===" >> run.log
-          GIT_PUSH_BOT=$(python3 scripts/read_vault.py -p /v1/kv/data/github -k GIT_PUSH_BOT 2>> run.log)
-          MY_TEL_ID=$(python3 scripts/read_vault.py -p /v1/kv/data/github -k MY_TEL_ID 2>> run.log)
+          github_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/github 2>> run.log)
+          GIT_PUSH_BOT=$(echo "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('GIT_PUSH_BOT', ''))" 2>/dev/null)
+          MY_TEL_ID=$(echo "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('MY_TEL_ID', ''))" 2>/dev/null)
           
           if [ -n "$GIT_PUSH_BOT" ] && [ -n "$MY_TEL_ID" ]; then
             echo "Successfully fetched credentials from Vault." >> run.log
@@ -46,6 +48,7 @@ jobs:
 
       # Step 4: Send log to Telegram
       - name: Send log to Telegram
+        if: always()
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ env.GIT_PUSH_BOT }}/sendDocument" \
             -F "chat_id=${{ env.MY_TEL_ID }}" \
