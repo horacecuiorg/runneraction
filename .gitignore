@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+bin/
+obj/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.user
+*.userossc
+*.sln.docstates
+
+# Secrets
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+*.pem
+*.key

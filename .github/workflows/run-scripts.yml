@@ -1,0 +1,44 @@
+name: Run Automation Scripts
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-scripts:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/horacecuiorg/dockerfile/ubuntu2204:githubrunner
+
+    steps:
+      # Step 1: Checkout the repository code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 3: Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          if [ -f scripts/requirements.txt ]; then
+            pip3 install -r scripts/requirements.txt
+          fi
+
+      # Step 4: Run Python Script (Read KV path)
+      - name: Run Vault helper script (Read KV path)
+        env:
+          VAULT_URL: ${{ secrets.VAULT_URL }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          python3 scripts/read_vault.py -p /v1/kv/data/kvtest1
+
+      # Step 5: Run Bash Script
+      - name: Run Bash script
+        run: |
+          # Use GREET_NAME from manual dispatch if present, otherwise default to "Runner"
+          GREET_NAME="${{ github.event.inputs.greet_name || 'GitHub Runner' }}"
+          ./scripts/sample_bash.sh --name "$GREET_NAME"
+
+      # Step 7: Run .NET Console Script
+      - name: Run .NET Console Script
+        run: |
+          GREET_NAME="${{ github.event.inputs.greet_name || 'GitHub Runner' }}"
+          dotnet run --project scripts/dotnet/RunnerScripts/RunnerScripts.csproj -- "$GREET_NAME"

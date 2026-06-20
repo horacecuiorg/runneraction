@@ -1,0 +1,54 @@
+name: Telegram Notification
+on:
+  workflow_dispatch:
+
+jobs:
+  run-scripts:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/horacecuiorg/dockerfile/ubuntu2204:githubrunner
+
+    steps:
+      # Step 1: Checkout the repository code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          echo "=== Installing Python dependencies ===" > run.log
+          python3 -m pip install --upgrade pip >> run.log 2>&1
+          if [ -f scripts/requirements.txt ]; then
+            pip3 install -r scripts/requirements.txt >> run.log 2>&1
+          fi
+
+      # Step 3: Fetch Telegram Credentials from Vault
+      - name: Fetch Telegram Credentials from Vault
+        env:
+          VAULT_URL: ${{ secrets.VAULT_URL }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          echo "=== Fetching Telegram credentials from Vault ===" >> run.log
+          GIT_PUSH_BOT=$(python3 scripts/read_vault.py -p /v1/kv/data/github -k GIT_PUSH_BOT 2>> run.log)
+          MY_TEL_ID=$(python3 scripts/read_vault.py -p /v1/kv/data/github -k MY_TEL_ID 2>> run.log)
+          
+          if [ -n "$GIT_PUSH_BOT" ] && [ -n "$MY_TEL_ID" ]; then
+            echo "Successfully fetched credentials from Vault." >> run.log
+          else
+            echo "Failed to fetch credentials from Vault." >> run.log
+            exit 1
+          fi
+          
+          echo "::add-mask::$GIT_PUSH_BOT"
+          echo "::add-mask::$MY_TEL_ID"
+          echo "GIT_PUSH_BOT=$GIT_PUSH_BOT" >> $GITHUB_ENV
+          echo "MY_TEL_ID=$MY_TEL_ID" >> $GITHUB_ENV
+
+      # Step 4: Send log to Telegram
+      - name: Send log to Telegram
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ env.GIT_PUSH_BOT }}/sendDocument" \
+            -F "chat_id=${{ env.MY_TEL_ID }}" \
+            -F "document=@run.log" \
+            -F "caption=GitHub Actions Run Log"
+
