@@ -1,0 +1,83 @@
+name: list_dns_records
+on:
+  workflow_dispatch:
+
+jobs:
+  run-scripts:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/horacecuiorg/dockerfile/ubuntu2204:githubrunner
+
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          echo "=== Installing Python dependencies ===" > run.log
+          python3 -m pip install --upgrade pip >> run.log 2>&1
+          if [ -f scripts/requirements.txt ]; then
+            pip3 install -r scripts/requirements.txt >> run.log 2>&1
+          fi
+
+      # Step 3: Fetch DNS Credentials from Vault
+      - name: Fetch DNS Credentials from Vault
+        env:
+          VAULT_URL: ${{ secrets.VAULT_URL }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          echo "=== Fetching DNS credentials from Vault ===" >> run.log
+          cf_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/cf 2>> run.log)
+          CF_DNS_API=$(echo "$cf_secrets" | jq -r '.CF_DNS_API')
+          CF_ZONE_CS=$(echo "$cf_secrets" | jq -r '.CF_ZONE_CS')
+
+          if [ -n "$CF_DNS_API" ] && [ "$CF_DNS_API" != "null" ] && [ -n "$CF_ZONE_CS" ] && [ "$CF_ZONE_CS" != "null" ]; then
+            echo "Successfully fetched credentials from Vault." >> run.log
+          else
+            echo "Failed to fetch credentials from Vault." >> run.log
+            exit 1
+          fi
+
+          echo "::add-mask::$CF_DNS_API"
+          echo "::add-mask::$CF_ZONE_CS"
+          echo "CF_DNS_API=$CF_DNS_API" >> $GITHUB_ENV
+          echo "CF_ZONE_CS=$CF_ZONE_CS" >> $GITHUB_ENV
+
+      # Step 4: Show list_dns_records
+      - name: Show list_dns_records
+        run: |
+          echo "=== Running list_dns_records.py ===" >> run.log
+          python3 scripts/list_dns_records.py ${CF_DNS_API} ${CF_ZONE_CS} >> run.log 2>&1
+
+      # Step 5: Fetch Telegram Credentials from Vault
+      - name: Fetch Telegram Credentials from Vault
+        env:
+          VAULT_URL: ${{ secrets.VAULT_URL }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          echo "=== Fetching Telegram credentials from Vault ===" >> run.log
+          github_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/github 2>> run.log)
+          GIT_PUSH_BOT=$(echo "$github_secrets" | jq -r '.GIT_PUSH_BOT')
+          MY_TEL_ID=$(echo "$github_secrets" | jq -r '.MY_TEL_ID')
+          
+          if [ -n "$GIT_PUSH_BOT" ] && [ "$GIT_PUSH_BOT" != "null" ] && [ -n "$MY_TEL_ID" ] && [ "$MY_TEL_ID" != "null" ]; then
+            echo "Successfully fetched credentials from Vault." >> run.log
+          else
+            echo "Failed to fetch credentials from Vault." >> run.log
+            exit 1
+          fi
+          
+          echo "::add-mask::$GIT_PUSH_BOT"
+          echo "::add-mask::$MY_TEL_ID"
+          echo "GIT_PUSH_BOT=$GIT_PUSH_BOT" >> $GITHUB_ENV
+          echo "MY_TEL_ID=$MY_TEL_ID" >> $GITHUB_ENV
+
+      # Step 6: Send log to Telegram
+      - name: Send log to Telegram
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ env.GIT_PUSH_BOT }}/sendDocument" \
+            -F "chat_id=${{ env.MY_TEL_ID }}" \
+            -F "document=@run.log" \
+            -F "caption=GitHub Actions Run Log"
