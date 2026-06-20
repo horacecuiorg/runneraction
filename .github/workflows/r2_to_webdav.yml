@@ -1,0 +1,166 @@
+name: r2_to_webdav
+on:
+  workflow_dispatch:
+    inputs:
+      debug_config:
+        description: 'Whether to write rclone.conf content to the log file (WARNING: exposes secrets)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  run-scripts:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/horacecuiorg/dockerfile/ubuntu2204:githubrunner
+
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | sed 's/\//-/g')
+          BRANCH_NAME="${{ github.ref_name }}"
+          WORKFLOW_NAME=$(basename "${{ github.workflow_ref }}" 2>/dev/null | cut -d'@' -f1 | sed 's/\.ya\?ml//')
+          if [ -z "$WORKFLOW_NAME" ]; then
+            WORKFLOW_NAME="r2_to_webdav"
+          fi
+          DATETIME=$(date +'%Y%m%d_%H%M%S')
+          LOG_FILENAME="${REPO_NAME}_${BRANCH_NAME}_${WORKFLOW_NAME}_${DATETIME}.log"
+          
+          echo "RUN_LOG=$LOG_FILENAME" >> $GITHUB_ENV
+          
+          echo "=== Installing Python dependencies ===" > "$LOG_FILENAME"
+          python3 -m pip install --upgrade pip >> "$LOG_FILENAME" 2>&1
+          if [ -f scripts/requirements.txt ]; then
+            pip3 install -r scripts/requirements.txt >> "$LOG_FILENAME" 2>&1
+          fi
+
+      # Step 3: Install Rclone
+      - name: Install Rclone
+        if: always()
+        run: |
+          if ! command -v rclone &> /dev/null; then
+            echo "=== Downloading rclone binary ===" >> "$RUN_LOG"
+            ARCH="amd64"
+            if [ "$(uname -m)" = "aarch64" ]; then
+              ARCH="arm64"
+            fi
+            curl -O "https://downloads.rclone.org/rclone-current-linux-${ARCH}.zip" >> "$RUN_LOG" 2>&1
+            unzip -j "rclone-current-linux-${ARCH}.zip" "rclone-*-linux-${ARCH}/rclone" -d . >> "$RUN_LOG" 2>&1
+            chmod +x ./rclone
+            echo "RCLONE_BIN=./rclone" >> $GITHUB_ENV
+          else
+            echo "=== Rclone is already installed ===" >> "$RUN_LOG"
+            echo "RCLONE_BIN=rclone" >> $GITHUB_ENV
+          fi
+
+      # Step 4: Fetch Configurations from Vault
+      - name: Fetch Configurations from Vault
+        if: always()
+        env:
+          VAULT_URL: ${{ secrets.VAULT_URL }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          echo "=== Fetching Rclone configs from Vault ===" >> "$RUN_LOG"
+          
+          # Fetch Cloudflare R2 config
+          r2_json=$(python3 scripts/read_vault.py -p /v1/kv/data/rclone/cloudflarer2 2>> "$RUN_LOG")
+          if [ -z "$r2_json" ] || [ "$r2_json" = "null" ]; then
+            echo "Failed to fetch cloudflarer2 configuration from Vault." >> "$RUN_LOG"
+            exit 1
+          fi
+          
+          # Fetch Qnap WebDAV config
+          qnap_json=$(python3 scripts/read_vault.py -p /v1/kv/data/rclone/qnapshareCloudflare 2>> "$RUN_LOG")
+          if [ -z "$qnap_json" ] || [ "$qnap_json" = "null" ]; then
+            echo "Failed to fetch qnapshareCloudflare configuration from Vault." >> "$RUN_LOG"
+            exit 1
+          fi
+          
+          # Extract raw config contents from config key using Python JSON parser
+          r2_config=$(printf "%s\n" "$r2_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('config', ''))" 2>/dev/null)
+          qnap_config=$(printf "%s\n" "$qnap_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('config', ''))" 2>/dev/null)
+
+          echo "=== Generating rclone.conf ===" >> "$RUN_LOG"
+          
+          echo "$r2_config" > rclone.conf
+          echo "" >> rclone.conf
+          echo "$qnap_config" >> rclone.conf
+          
+          if [ "${{ github.event.inputs.debug_config }}" = "true" ]; then
+            echo "=== rclone.conf ===" >> "$RUN_LOG"
+            cat rclone.conf >> "$RUN_LOG"
+            echo "===================" >> "$RUN_LOG"
+          fi
+          
+          echo "Successfully generated rclone.conf" >> "$RUN_LOG"
+
+      # Step 5: Execute Rclone Copy
+      - name: Execute Rclone Copy
+        if: always()
+        run: |
+          echo "=== Starting Rclone Copy ===" >> "$RUN_LOG"
+          
+          # Define variables for source and destination paths (modify as needed)
+          # Note: cloudflarer2 and qnapshareCloudflare are the remote names defined inside Vault configurations
+          SOURCE_PATH="cloudflarer2:storage-r2/certs/"
+          DEST_PATH="qnapshareCloudflare:pcShare/test2"
+          
+          if [ "${{ github.event.inputs.debug_config }}" = "true" ]; then
+            echo "Debug mode enabled. Listing contents of source ($SOURCE_PATH):" >> "$RUN_LOG"
+            "$RCLONE_BIN" --config rclone.conf ls "$SOURCE_PATH" >> "$RUN_LOG" 2>&1 || true
+            
+            echo "Listing contents of destination ($DEST_PATH):" >> "$RUN_LOG"
+            "$RCLONE_BIN" --config rclone.conf ls "$DEST_PATH" >> "$RUN_LOG" 2>&1 || true
+          else
+            echo "Copying from $SOURCE_PATH to $DEST_PATH" >> "$RUN_LOG"
+            # Run the copy command
+            "$RCLONE_BIN" --config rclone.conf copy "$SOURCE_PATH" "$DEST_PATH" >> "$RUN_LOG" 2>&1
+            
+            if [ $? -eq 0 ]; then
+              echo "Rclone copy completed successfully." >> "$RUN_LOG"
+            else
+              echo "Rclone copy failed." >> "$RUN_LOG"
+              exit 1
+            fi
+          fi
+
+      # Step 6: Fetch Telegram Credentials from Vault
+      - name: Fetch Telegram Credentials from Vault
+        if: always()
+        env:
+          VAULT_URL: ${{ secrets.VAULT_URL }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          echo "=== Fetching Telegram credentials from Vault ===" >> "$RUN_LOG"
+          github_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/github 2>> "$RUN_LOG")
+          GIT_PUSH_BOT=$(printf "%s\n" "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('GIT_PUSH_BOT', ''))" 2>/dev/null)
+          MY_TEL_ID=$(printf "%s\n" "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('MY_TEL_ID', ''))" 2>/dev/null)
+          
+          if [ -n "$GIT_PUSH_BOT" ] && [ -n "$MY_TEL_ID" ]; then
+            echo "Successfully fetched credentials from Vault." >> "$RUN_LOG"
+          else
+            echo "Failed to fetch credentials from Vault." >> "$RUN_LOG"
+            exit 1
+          fi
+          
+          echo "::add-mask::$GIT_PUSH_BOT"
+          echo "::add-mask::$MY_TEL_ID"
+          echo "GIT_PUSH_BOT=$GIT_PUSH_BOT" >> $GITHUB_ENV
+          echo "MY_TEL_ID=$MY_TEL_ID" >> $GITHUB_ENV
+
+      # Step 7: Send log to Telegram
+      - name: Send log to Telegram
+        if: always()
+        run: |
+          echo "=== RUN LOG CONTENTS ==="
+          cat "${{ env.RUN_LOG }}" || true
+          echo "========================"
+          curl -s -X POST "https://api.telegram.org/bot${{ env.GIT_PUSH_BOT }}/sendDocument" \
+            -F "chat_id=${{ env.MY_TEL_ID }}" \
+            -F "document=@${{ env.RUN_LOG }}" \
+            -F "caption=GitHub Actions Run Log"

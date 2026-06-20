@@ -18,7 +18,10 @@ jobs:
         run: |
           REPO_NAME=$(echo "${{ github.repository }}" | sed 's/\//-/g')
           BRANCH_NAME="${{ github.ref_name }}"
-          WORKFLOW_NAME=$(basename "${{ github.workflow_ref }}" | cut -d'@' -f1 | sed 's/\.ya\?ml//')
+          WORKFLOW_NAME=$(basename "${{ github.workflow_ref }}" 2>/dev/null | cut -d'@' -f1 | sed 's/\.ya\?ml//')
+          if [ -z "$WORKFLOW_NAME" ]; then
+            WORKFLOW_NAME="list_dns_records"
+          fi
           DATETIME=$(date +'%Y%m%d_%H%M%S')
           LOG_FILENAME="${REPO_NAME}_${BRANCH_NAME}_${WORKFLOW_NAME}_${DATETIME}.log"
           
@@ -39,8 +42,8 @@ jobs:
         run: |
           echo "=== Fetching DNS credentials from Vault ===" >> "$RUN_LOG"
           cf_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/cf 2>> "$RUN_LOG")
-          CF_DNS_API=$(echo "$cf_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('CF_DNS_API', ''))" 2>/dev/null)
-          CF_ZONE_CS=$(echo "$cf_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('CF_ZONE_CS', ''))" 2>/dev/null)
+          CF_DNS_API=$(printf "%s\n" "$cf_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('CF_DNS_API', ''))" 2>/dev/null)
+          CF_ZONE_CS=$(printf "%s\n" "$cf_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('CF_ZONE_CS', ''))" 2>/dev/null)
 
           if [ -n "$CF_DNS_API" ] && [ -n "$CF_ZONE_CS" ]; then
             echo "Successfully fetched credentials from Vault." >> "$RUN_LOG"
@@ -70,8 +73,8 @@ jobs:
         run: |
           echo "=== Fetching Telegram credentials from Vault ===" >> "$RUN_LOG"
           github_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/github 2>> "$RUN_LOG")
-          GIT_PUSH_BOT=$(echo "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('GIT_PUSH_BOT', ''))" 2>/dev/null)
-          MY_TEL_ID=$(echo "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('MY_TEL_ID', ''))" 2>/dev/null)
+          GIT_PUSH_BOT=$(printf "%s\n" "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('GIT_PUSH_BOT', ''))" 2>/dev/null)
+          MY_TEL_ID=$(printf "%s\n" "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('MY_TEL_ID', ''))" 2>/dev/null)
           
           if [ -n "$GIT_PUSH_BOT" ] && [ -n "$MY_TEL_ID" ]; then
             echo "Successfully fetched credentials from Vault." >> "$RUN_LOG"
