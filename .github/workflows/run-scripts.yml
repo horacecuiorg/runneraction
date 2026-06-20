@@ -7,6 +7,10 @@ on:
         description: 'Skip Vault SSL verification (true/false)'
         required: false
         default: 'false'
+      run_diagnostics:
+        description: 'Run Vault SSL Diagnostics (true/false)'
+        required: false
+        default: 'false'
 
 jobs:
   run-scripts:
@@ -29,6 +33,7 @@ jobs:
 
       # Step 3.5: Vault SSL Diagnostics
       - name: Vault SSL Diagnostics
+        if: ${{ github.event.inputs.run_diagnostics == 'true' }}
         shell: bash
         env:
           VAULT_URL: ${{ secrets.VAULT_URL }}
