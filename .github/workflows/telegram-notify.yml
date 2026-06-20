@@ -16,10 +16,18 @@ jobs:
       # Step 2: Install Python dependencies
       - name: Install Python dependencies
         run: |
-          echo "=== Installing Python dependencies ===" > run.log
-          python3 -m pip install --upgrade pip >> run.log 2>&1
+          REPO_NAME=$(echo "${{ github.repository }}" | sed 's/\//-/g')
+          BRANCH_NAME="${{ github.ref_name }}"
+          WORKFLOW_NAME=$(basename "${{ github.workflow_ref }}" | cut -d'@' -f1 | sed 's/\.ya\?ml//')
+          DATETIME=$(date +'%Y%m%d_%H%M%S')
+          LOG_FILENAME="${REPO_NAME}_${BRANCH_NAME}_${WORKFLOW_NAME}_${DATETIME}.log"
+          
+          echo "RUN_LOG=$LOG_FILENAME" >> $GITHUB_ENV
+          
+          echo "=== Installing Python dependencies ===" > "$LOG_FILENAME"
+          python3 -m pip install --upgrade pip >> "$LOG_FILENAME" 2>&1
           if [ -f scripts/requirements.txt ]; then
-            pip3 install -r scripts/requirements.txt >> run.log 2>&1
+            pip3 install -r scripts/requirements.txt >> "$LOG_FILENAME" 2>&1
           fi
 
       # Step 3: Fetch Telegram Credentials from Vault
@@ -29,15 +37,15 @@ jobs:
           VAULT_URL: ${{ secrets.VAULT_URL }}
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
         run: |
-          echo "=== Fetching Telegram credentials from Vault ===" >> run.log
-          github_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/github 2>> run.log)
+          echo "=== Fetching Telegram credentials from Vault ===" >> "$RUN_LOG"
+          github_secrets=$(python3 scripts/read_vault.py -p /v1/kv/data/github 2>> "$RUN_LOG")
           GIT_PUSH_BOT=$(echo "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('GIT_PUSH_BOT', ''))" 2>/dev/null)
           MY_TEL_ID=$(echo "$github_secrets" | python3 -c "import sys, json; print(json.load(sys.stdin).get('MY_TEL_ID', ''))" 2>/dev/null)
           
           if [ -n "$GIT_PUSH_BOT" ] && [ -n "$MY_TEL_ID" ]; then
-            echo "Successfully fetched credentials from Vault." >> run.log
+            echo "Successfully fetched credentials from Vault." >> "$RUN_LOG"
           else
-            echo "Failed to fetch credentials from Vault." >> run.log
+            echo "Failed to fetch credentials from Vault." >> "$RUN_LOG"
             exit 1
           fi
           
@@ -52,6 +60,5 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ env.GIT_PUSH_BOT }}/sendDocument" \
             -F "chat_id=${{ env.MY_TEL_ID }}" \
-            -F "document=@run.log" \
+            -F "document=@${{ env.RUN_LOG }}" \
             -F "caption=GitHub Actions Run Log"
-
