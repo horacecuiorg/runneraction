@@ -24,6 +24,7 @@ jobs:
 
       # Step 3.5: Vault SSL Diagnostics
       - name: Vault SSL Diagnostics
+        shell: bash
         env:
           VAULT_URL: ${{ secrets.VAULT_URL }}
         run: |
@@ -49,7 +50,7 @@ jobs:
           echo "Target Port: $PORT"
           
           echo "=== DNS Resolution ==="
-          nslookup "$PURE_HOST" || host "$PURE_HOST" || echo "DNS lookup tool not found"
+          python3 -c "import socket; print('Resolved IP(s):', ', '.join(set(x[4][0] for x in socket.getaddrinfo('$PURE_HOST', None))))" || echo "DNS resolution via Python failed"
           
           echo "=== SSL Connection Check ==="
           if [[ "$VAULT_URL" =~ https:// ]]; then
@@ -59,6 +60,7 @@ jobs:
           else
             echo "HTTP endpoint detected, skipping SSL checks."
           fi
+
 
       # Step 4: Run Python Script (Read KV path)
       - name: Run Vault helper script (Read KV path)
