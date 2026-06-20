@@ -62,8 +62,13 @@ def read_vault_key(path: str, key_name: str = None) -> str:
     :raises VaultError: For other HTTP errors or malformed data
     """
     vault_addr = os.getenv("VAULT_ADDR") or os.getenv("VAULT_URL")
+    if vault_addr:
+        vault_addr = vault_addr.strip()
+        
     vault_token = os.getenv("VAULT_TOKEN")
-
+    if vault_token:
+        vault_token = vault_token.strip()
+ 
     if not vault_addr:
         raise VaultConfigurationError("VAULT_ADDR or VAULT_URL environment variable is not set.")
     if not vault_token:
