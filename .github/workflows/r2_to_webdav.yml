@@ -84,10 +84,10 @@ jobs:
           fi
 
           echo "=== Generating rclone.conf ===" >> "$RUN_LOG"
-          echo "[cloudflarer2]" > rclone.conf
-          echo "$r2_config" >> rclone.conf
+          
+          echo "$r2_config" > rclone.conf
           echo "" >> rclone.conf
-          echo "[qnapshareCloudflare]" >> rclone.conf
+          
           echo "$qnap_config" >> rclone.conf
           
           if [ "${{ github.event.inputs.debug_config }}" = "true" ]; then
