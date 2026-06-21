@@ -68,27 +68,26 @@ jobs:
           echo "=== Fetching Rclone configs from Vault ===" >> "$RUN_LOG"
           
           # Fetch Cloudflare R2 config
-          r2_json=$(python3 scripts/read_vault.py -p /v1/kv/data/rclone/cloudflarer2 2>> "$RUN_LOG")
-          if [ -z "$r2_json" ] || [ "$r2_json" = "null" ]; then
-            echo "Failed to fetch cloudflarer2 configuration from Vault." >> "$RUN_LOG"
+          rclone_json=$(python3 scripts/read_vault.py -p /v1/kv/data/rclone 2>> "$RUN_LOG")
+          if [ -z "$rclone_json" ] || [ "$rclone_json" = "null" ]; then
+            echo "Failed to fetch rclone configuration from Vault." >> "$RUN_LOG"
             exit 1
-          fi
-          
-          # Fetch Qnap WebDAV config
-          qnap_json=$(python3 scripts/read_vault.py -p /v1/kv/data/rclone/qnapshareCloudflare 2>> "$RUN_LOG")
-          if [ -z "$qnap_json" ] || [ "$qnap_json" = "null" ]; then
-            echo "Failed to fetch qnapshareCloudflare configuration from Vault." >> "$RUN_LOG"
-            exit 1
-          fi
+          fi      
           
           # Extract raw config contents from config key using Python JSON parser
-          r2_config=$(printf "%s\n" "$r2_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('config', ''))" 2>/dev/null)
-          qnap_config=$(printf "%s\n" "$qnap_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('config', ''))" 2>/dev/null)
+          r2_config=$(printf "%s\n" "$rclone_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('cloudflarer2', ''))" 2>/dev/null)
+          qnap_config=$(printf "%s\n" "$rclone_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('qnapshareCloudflare', ''))" 2>/dev/null)
+
+          if [ -z "$r2_config" ] || [ -z "$qnap_config" ]; then
+            echo "Failed to extract configuration keys from Vault JSON." >> "$RUN_LOG"
+            exit 1
+          fi
 
           echo "=== Generating rclone.conf ===" >> "$RUN_LOG"
-          
-          echo "$r2_config" > rclone.conf
+          echo "[cloudflarer2]" > rclone.conf
+          echo "$r2_config" >> rclone.conf
           echo "" >> rclone.conf
+          echo "[qnapshareCloudflare]" >> rclone.conf
           echo "$qnap_config" >> rclone.conf
           
           if [ "${{ github.event.inputs.debug_config }}" = "true" ]; then
