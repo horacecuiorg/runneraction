@@ -1,0 +1,59 @@
+name: Temporal Callback Test (runneraction)
+on:
+  workflow_dispatch:
+    inputs:
+      temporal_workflow_id:
+        description: "Temporal workflow ID to signal on completion"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cloudflared
+        run: |
+          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
+            -o /tmp/cloudflared.deb
+          sudo dpkg -i /tmp/cloudflared.deb
+
+      - name: Get OIDC Token
+        id: oidc
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=validate-jumphost" | \
+            python3 -c "import json,sys; print(json.load(sys.stdin)['value'])")
+          echo "jwt=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Start cloudflared tunnel to OIDC Gateway
+        env:
+          CF_OIDC_HOST: ${{ secrets.CF_OIDC_HOST }}
+        run: |
+          cloudflared access tcp --hostname "$CF_OIDC_HOST" --url localhost:8443 > /tmp/cf-oidc.log 2>&1 &
+          sleep 5
+
+      - name: Echo test
+        run: echo "✅ runneraction temporal callback test $(date)"
+
+      - name: 回调 Temporal Signal (经 /passapi OIDC 网关)
+        run: |
+          WF_ID="${{ github.event.inputs.temporal_workflow_id }}"
+          echo "Signaling Temporal workflow via /passapi: $WF_ID"
+          RESP=$(curl -s -w "\nHTTP:%{http_code}" -X POST \
+            http://localhost:8443/passapi/api/temporal/signal \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.jwt }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"workflow_id\":\"$WF_ID\",\"signal_name\":\"signal_runner_completed\",\"status\":\"success\"}")
+          echo "$RESP"
+          HTTP_CODE=$(echo "$RESP" | grep "HTTP:" | cut -d: -f2)
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Temporal signal delivered via OIDC gateway"
+          else
+            echo "❌ Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
