@@ -1,0 +1,132 @@
+name: Test Vault OIDC
+on:
+  workflow_dispatch:
+
+jobs:
+  test-vault-oidc:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cloudflared
+        run: |
+          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
+            -o /tmp/cloudflared.deb
+          sudo dpkg -i /tmp/cloudflared.deb
+
+      - name: Get OIDC Token
+        id: oidc
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=validate-jumphost" | \
+            python3 -c "import json,sys; print(json.load(sys.stdin)['value'])")
+          echo "jwt=$TOKEN" >> "$GITHUB_OUTPUT"
+          echo "✅ OIDC token obtained (${#TOKEN} chars)"
+
+      - name: Generate ephemeral SSH key
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/tunnel-key -N "" -C "vault-test-$(date +%s)" >/dev/null
+          echo "✅ SSH key generated"
+
+      - name: Authenticate to OIDC Gateway
+        id: auth
+        env:
+          CF_OIDC_HOST: ${{ secrets.CF_OIDC_HOST }}
+        run: |
+          cloudflared access tcp --hostname "$CF_OIDC_HOST" --url localhost:8443 > /tmp/cf-oidc.log 2>&1 &
+          CF_OIDC_PID=$!
+          sleep 5
+
+          RESP=$(curl -s -X POST http://localhost:8443/verify \
+            -H "Content-Type: application/json" \
+            -d "{\"jwt\":\"${{ steps.oidc.outputs.jwt }}\",\"public_key\":\"$(cat /tmp/tunnel-key.pub)\"}")
+          STATUS=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
+
+          kill $CF_OIDC_PID 2>/dev/null || true
+
+          if [ "$STATUS" = "ok" ]; then
+            echo "✅ OIDC authentication successful"
+          else
+            echo "❌ OIDC Authentication failed: $RESP"
+            exit 1
+          fi
+
+      - name: Start cloudflared tunnel
+        id: tunnel
+        env:
+          CF_JUMPHOST_HOST: ${{ secrets.CF_JUMPHOST_HOST }}
+        run: |
+          cloudflared access tcp --hostname "$CF_JUMPHOST_HOST" --url localhost:2222 > /tmp/cf-tunnel.log 2>&1 &
+          echo "CF_SSH_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Connect SSH & Port forward Vault
+        env:
+          VAULT_INTERNAL_ADDR: ${{ vars.VAULT_INTERNAL_ADDR }}
+        run: |
+          # Wait and retry SSH connection in case key propagation has latency
+          SSH_SUCCESS=0
+          for i in $(seq 1 6); do
+            sleep 3
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i /tmp/tunnel-key \
+              ubuntu@localhost -p 2222 "echo SSH OK" >/dev/null 2>&1; then
+              SSH_SUCCESS=1
+              echo "✅ SSH connected successfully on attempt $i"
+              break
+            fi
+            echo "  Waiting for SSH authorization (attempt $i/6)..."
+          done
+
+          if [ "$SSH_SUCCESS" -ne 1 ]; then
+            echo "❌ SSH connection failed: Permission denied (publickey)"
+            exit 1
+          fi
+
+          # Port forward to Vault
+          ssh -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 \
+            -i /tmp/tunnel-key \
+            -N -L 18200:${VAULT_INTERNAL_ADDR} \
+            ubuntu@localhost -p 2222 &
+          echo "SSH_FWD_PID=$!" >> "$GITHUB_ENV"
+          sleep 3
+
+      - name: Vault OIDC Auth & Fetch Secret
+        env:
+          VAULT_ROLE: "github-runneraction"
+        run: |
+          set -e
+          # Vault 专用 OIDC token: audience=vault-ci (与 Vault role bound_audiences 一致)
+          GITHUB_JWT=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=vault-ci" | \
+            python3 -c "import json,sys; print(json.load(sys.stdin)['value'])")
+
+          # Vault JWT login (audience=vault-ci 与 role bound_audiences 一致)
+          VAULT_RESP=$(curl -s --connect-timeout 5 \
+            -X POST http://localhost:18200/v1/auth/jwt/login \
+            -H "Content-Type: application/json" \
+            -d "{\"jwt\":\"$GITHUB_JWT\",\"role\":\"$VAULT_ROLE\"}")
+          echo "=== Vault login response ==="
+          echo "$VAULT_RESP" | python3 -m json.tool 2>/dev/null || echo "$VAULT_RESP"
+
+          VAULT_TOKEN=$(echo "$VAULT_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('auth',{}).get('client_token',''))")
+          if [ -z "$VAULT_TOKEN" ]; then
+            echo "❌ Vault JWT login failed"
+            exit 1
+          fi
+          echo "✅ Vault token obtained"
+          echo "::add-mask::$VAULT_TOKEN"
+
+          echo ""
+          echo "=== Reading kv/data/logswrite ==="
+          curl -s http://localhost:18200/v1/kv/data/logswrite \
+            -H "X-Vault-Token: $VAULT_TOKEN" | python3 -m json.tool
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill $SSH_FWD_PID 2>/dev/null || true
+          kill $CF_SSH_PID 2>/dev/null || true
+          rm -f /tmp/tunnel-key /tmp/tunnel-key.pub /tmp/cloudflared.deb
