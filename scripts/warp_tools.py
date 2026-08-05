@@ -2,8 +2,10 @@
 """WARP 设备管理工具 — 消费 Upstash 中的 CF 临时 token (零静态高权凭据)
 
 用法:
-  warp-tools.py list                       # 列出所有 WARP 设备
-  warp-tools.py delete <device_name>       # 删除指定设备 (预留)
+  warp-tools.py list                                  # 列出所有 WARP 设备
+  warp-tools.py delete <device_name>                  # 删除指定设备
+  warp-tools.py cleanup [hours] [--dry-run]           # 清理 non_identity 且不活跃 >N 小时(默认6) 的设备
+                                                      # --dry-run 只列出不删除 (默认启用 dry-run)
 
 环境变量 (或 ~/.env 文件):
   UPSTASH_REST_URL         Upstash REST 地址 (https://xxx.upstash.io)
@@ -18,9 +20,11 @@ import sys
 import json
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 
 UPSTASH_KEY = os.environ.get("UPSTASH_KEY", "cf:warp:temp_token")
 CF_API = "https://api.cloudflare.com/client/v4"
+NON_IDENTITY_PREFIX = "non_identity"
 
 
 def load_env():
@@ -71,7 +75,40 @@ def get_cf_token():
     return cf_token
 
 
+def get_service_token_map(cf_token, account_id):
+    """{service_token_id: name} 映射"""
+    resp = http("GET", f"{CF_API}/accounts/{account_id}/access/service_tokens",
+                headers={"Authorization": f"Bearer {cf_token}"})
+    return {t.get("id"): t.get("name", "?") for t in resp.get("result", [])}
+
+
+def get_non_identity_token_id(cf_token, account_id):
+    """WARP Login App 的 non_identity policy 绑定的 service token id (无则 None)"""
+    resp = http("GET", f"{CF_API}/accounts/{account_id}/access/apps",
+                headers={"Authorization": f"Bearer {cf_token}"})
+    for a in resp.get("result", []):
+        if a.get("type") == "warp" or "warp" in a.get("domain", "").lower():
+            for p in a.get("policies", []):
+                if p.get("decision") == "non_identity":
+                    for inc in p.get("include", []):
+                        if "service_token" in inc:
+                            return inc["service_token"].get("token_id")
+    return None
+
+
+def auth_label(email, st_map, non_id_token_id):
+    """设备认证显示: 普通邮箱直显; non_identity 显示绑定的 service token 名"""
+    if not email:
+        return "N/A"
+    if email.startswith(NON_IDENTITY_PREFIX):
+        name = st_map.get(non_id_token_id) if non_id_token_id else None
+        return f"{name} (non_identity)" if name else "non_identity"
+    return email
+
+
 def list_devices(cf_token, account_id):
+    st_map = get_service_token_map(cf_token, account_id)
+    non_id_token_id = get_non_identity_token_id(cf_token, account_id)
     resp = http("GET", f"{CF_API}/accounts/{account_id}/devices",
                 headers={"Authorization": f"Bearer {cf_token}"})
     devices = resp.get("result", [])
@@ -81,14 +118,18 @@ def list_devices(cf_token, account_id):
     print(f"📱 WARP 设备 ({len(devices)} 台):\n")
     for idx, d in enumerate(devices, 1):
         user = d.get("user", {})
-        email = user.get("email", "N/A")
-        auth = f"non_identity ({email.split('@')[0]})" if email.startswith("non_identity") else email
         name = d.get("name", "?")
-        os_ver = d.get("os_version", "?")
-        last_seen = d.get("last_seen", "?")[:10]
+        os_extra = d.get("os_version_extra") or ""
+        os_str = d.get("os_version", "?")
+        if os_extra:
+            os_str += f" ({os_extra})"
         print(f"{idx}. `{name}`")
-        print(f"   - 认证: {auth}")
-        print(f"   - 系统: {os_ver} | 活跃: {last_seen}")
+        print(f"   - 认证: {auth_label(user.get('email'), st_map, non_id_token_id)}")
+        print(f"   - 类型: {d.get('device_type','?')} | 系统: {os_str}")
+        print(f"   - 模型: {d.get('model','?')}")
+        print(f"   - IP: {d.get('ip','?')} | MAC: {d.get('mac_address','?')}")
+        print(f"   - 版本: {d.get('version','?')} | 活跃: {str(d.get('last_seen','?'))[:19]}")
+        print(f"   - 创建: {str(d.get('created','?'))[:10]} | ID: {d.get('id','?')}")
         print()
 
 
@@ -110,9 +151,71 @@ def delete_device(cf_token, account_id, target):
         sys.exit(f"❌ 删除失败: {json.dumps(del_resp, ensure_ascii=False)[:400]}")
 
 
+def parse_last_seen(raw):
+    """解析 CF last_seen (ISO 8601) → 时区感知 datetime; 解析失败返回 None"""
+    if not raw:
+        return None
+    try:
+        s = raw.replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def cleanup_devices(cf_token, account_id, hours, dry_run=True):
+    """清理 non_identity 认证 + 不活跃超过 hours 小时的设备"""
+    st_map = get_service_token_map(cf_token, account_id)
+    non_id_token_id = get_non_identity_token_id(cf_token, account_id)
+    resp = http("GET", f"{CF_API}/accounts/{account_id}/devices",
+                headers={"Authorization": f"Bearer {cf_token}"})
+    devices = resp.get("result", [])
+    now = datetime.now(timezone.utc)
+    cutoff = hours * 3600
+
+    targets = []
+    for d in devices:
+        user = d.get("user", {})
+        email = user.get("email", "")
+        if not email.startswith(NON_IDENTITY_PREFIX):
+            continue
+        last = parse_last_seen(d.get("last_seen"))
+        if last is None:
+            print(f"⚠️ 跳过 (无法解析 last_seen): {d.get('name')}")
+            continue
+        inactive = (now - last).total_seconds()
+        if inactive > cutoff:
+            targets.append((d, inactive))
+
+    if not targets:
+        print(f"✅ 无符合条件的设备 (non_identity 且不活跃 > {hours}h)")
+        return
+
+    print(f"🎯 命中 {len(targets)} 台 (non_identity 且不活跃 > {hours}h):\n")
+    for d, inactive in targets:
+        print(f"`{d.get('name')}`")
+        print(f"   - 认证: {auth_label(d.get('user',{}).get('email'), st_map, non_id_token_id)}")
+        print(f"   - ID: {d.get('id')} | 类型: {d.get('device_type','?')} | IP: {d.get('ip','?')}")
+        print(f"   - 不活跃: {int(inactive//3600)}h {int(inactive%3600//60)}m | 最后活跃: {str(d.get('last_seen','?'))[:19]}")
+        print()
+
+    if dry_run:
+        print(f"🛡️  dry-run 模式: 未执行删除。确认无误后去掉 --dry-run 或设 dry_run=false 再跑。")
+        return
+
+    print(f"🗑️  正在删除 {len(targets)} 台设备...")
+    for d, _ in targets:
+        del_resp = http("DELETE", f"{CF_API}/accounts/{account_id}/devices/{d.get('id')}",
+                        headers={"Authorization": f"Bearer {cf_token}"})
+        if del_resp.get("success"):
+            print(f"✅ 已删除: `{d.get('name')}`")
+        else:
+            print(f"❌ 删除失败: `{d.get('name')}` {json.dumps(del_resp, ensure_ascii=False)[:200]}")
+
+
 def main():
     load_env()
-    action = sys.argv[1] if len(sys.argv) > 1 else "list"
+    args = sys.argv[1:]
+    action = args[0] if args else "list"
     account_id = os.environ.get("CF_ACCOUNT_ID", "")
     if not account_id:
         sys.exit("❌ 未设置 CF_ACCOUNT_ID")
@@ -123,12 +226,26 @@ def main():
     if action == "list":
         list_devices(cf_token, account_id)
     elif action == "delete":
-        target = sys.argv[2] if len(sys.argv) > 2 else None
+        target = args[1] if len(args) > 1 else None
         if not target:
             sys.exit("用法: warp-tools.py delete <device_name>")
         delete_device(cf_token, account_id, target)
+    elif action == "cleanup":
+        hours = 6
+        dry_run = True
+        for a in args[1:]:
+            if a == "--dry-run":
+                dry_run = True
+            elif a == "--apply":
+                dry_run = False
+            else:
+                try:
+                    hours = int(a)
+                except ValueError:
+                    sys.exit(f"❌ 无法解析参数: {a} (支持: 小时数 / --dry-run / --apply)")
+        cleanup_devices(cf_token, account_id, hours, dry_run)
     else:
-        sys.exit(f"❌ 未知操作: {action} (支持: list | delete)")
+        sys.exit(f"❌ 未知操作: {action} (支持: list | delete | cleanup)")
 
 
 if __name__ == "__main__":

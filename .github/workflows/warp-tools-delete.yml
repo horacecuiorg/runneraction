@@ -1,0 +1,61 @@
+name: warp_tools_delete
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '删除操作: single 删单台 / cleanup 批量清理 non_identity 不活跃设备'
+        required: true
+        type: choice
+        options:
+          - single
+          - cleanup
+      device_name:
+        description: '要删除的设备名称 (action=single 时必填)'
+        required: false
+        type: string
+      hours:
+        description: '不活跃阈值小时数 (action=cleanup 用, 默认 6)'
+        required: false
+        default: '6'
+        type: string
+      confirm:
+        description: '确认删除: 必须选 yes 才执行 (no 直接中止)'
+        required: true
+        default: 'no'
+        type: choice
+        options:
+          - 'no'
+          - 'yes'
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/horacecuiorg/dockerfile/ubuntu2204:githubrunner
+    env:
+      UPSTASH_REST_URL: ${{ secrets.UPSTASH_REST_URL }}
+      UPSTASH_REST_TOKEN_RO: ${{ secrets.UPSTASH_REST_TOKEN_RO }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 确认检查 (confirm=yes 才继续)
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "yes" ]; then
+            echo "❌ 未确认删除 (confirm 必须选 yes)"
+            exit 1
+          fi
+          echo "✅ 已确认，继续执行"
+
+      - name: 运行 WARP 删除
+        run: |
+          ACTION="${{ github.event.inputs.action }}"
+          if [ "$ACTION" = "single" ]; then
+            echo "▶️  warp_tools.py delete ${{ github.event.inputs.device_name }}"
+            python3 scripts/warp_tools.py delete "${{ github.event.inputs.device_name }}"
+          else
+            echo "▶️  warp_tools.py cleanup ${{ github.event.inputs.hours }} --apply"
+            python3 scripts/warp_tools.py cleanup "${{ github.event.inputs.hours }}" --apply
+          fi

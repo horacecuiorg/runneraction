@@ -1,0 +1,42 @@
+name: warp_tools_check
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '检查操作: list 列全部设备 / preview 预览将被清理的 non_identity 不活跃设备'
+        required: true
+        default: 'list'
+        type: choice
+        options:
+          - list
+          - preview
+      hours:
+        description: '不活跃阈值小时数 (action=preview 用, 默认 6)'
+        required: false
+        default: '6'
+        type: string
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/horacecuiorg/dockerfile/ubuntu2204:githubrunner
+    env:
+      UPSTASH_REST_URL: ${{ secrets.UPSTASH_REST_URL }}
+      UPSTASH_REST_TOKEN_RO: ${{ secrets.UPSTASH_REST_TOKEN_RO }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 运行 WARP 检查 (只读)
+        run: |
+          ACTION="${{ github.event.inputs.action }}"
+          if [ "$ACTION" = "list" ]; then
+            echo "▶️  warp_tools.py list (全部设备)"
+            python3 scripts/warp_tools.py list
+          else
+            echo "▶️  warp_tools.py cleanup ${{ github.event.inputs.hours }} --dry-run (预览)"
+            python3 scripts/warp_tools.py cleanup "${{ github.event.inputs.hours }}" --dry-run
+          fi
