@@ -106,9 +106,17 @@ def auth_label(email, st_map, non_id_token_id):
     return email
 
 
+def get_virtual_ips(cf_token, account_id):
+    """{device_id: (virtual_ipv4, virtual_ipv6)} — 来自 /devices/registrations (Dashboard 同源)"""
+    resp = http("GET", f"{CF_API}/accounts/{account_id}/devices/registrations",
+                headers={"Authorization": f"Bearer {cf_token}"})
+    return {r.get("id"): (r.get("virtual_ipv4"), r.get("virtual_ipv6")) for r in resp.get("result", [])}
+
+
 def list_devices(cf_token, account_id):
     st_map = get_service_token_map(cf_token, account_id)
     non_id_token_id = get_non_identity_token_id(cf_token, account_id)
+    vips = get_virtual_ips(cf_token, account_id)
     resp = http("GET", f"{CF_API}/accounts/{account_id}/devices",
                 headers={"Authorization": f"Bearer {cf_token}"})
     devices = resp.get("result", [])
@@ -123,11 +131,13 @@ def list_devices(cf_token, account_id):
         os_str = d.get("os_version", "?")
         if os_extra:
             os_str += f" ({os_extra})"
+        vip4, vip6 = vips.get(d.get("id"), (None, None))
+        vip_line = f"WARP IPv4: {vip4} | IPv6: {vip6}" if vip4 else "WARP IPv4: ?"
         print(f"{idx}. `{name}`")
         print(f"   - 认证: {auth_label(user.get('email'), st_map, non_id_token_id)}")
         print(f"   - 类型: {d.get('device_type','?')} | 系统: {os_str}")
         print(f"   - 模型: {d.get('model','?')}")
-        print(f"   - IP: {d.get('ip','?')} | MAC: {d.get('mac_address','?')}")
+        print(f"   - {vip_line}")
         print(f"   - 版本: {d.get('version','?')} | 活跃: {str(d.get('last_seen','?'))[:19]}")
         print(f"   - 创建: {str(d.get('created','?'))[:10]} | ID: {d.get('id','?')}")
         print()
@@ -194,7 +204,7 @@ def cleanup_devices(cf_token, account_id, hours, dry_run=True):
     for d, inactive in targets:
         print(f"`{d.get('name')}`")
         print(f"   - 认证: {auth_label(d.get('user',{}).get('email'), st_map, non_id_token_id)}")
-        print(f"   - ID: {d.get('id')} | 类型: {d.get('device_type','?')} | IP: {d.get('ip','?')}")
+        print(f"   - ID: {d.get('id')} | 类型: {d.get('device_type','?')}")
         print(f"   - 不活跃: {int(inactive//3600)}h {int(inactive%3600//60)}m | 最后活跃: {str(d.get('last_seen','?'))[:19]}")
         print()
 
