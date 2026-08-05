@@ -10,9 +10,12 @@
 runneraction/
 ├── .github/
 │   └── workflows/
-│       └── run-scripts.yml       # GitHub Actions 工作流配置文件
+│       ├── run-scripts.yml           # GitHub Actions 工作流配置文件
+│       ├── warp-tools-check.yml      # WARP 设备检查 (只读: list/preview)
+│       └── warp-tools-delete.yml     # WARP 设备删除 (single/cleanup, confirm 闸门)
 ├── scripts/
 │   ├── read_vault.py             # Vault 密钥读取 Python 脚本
+│   ├── warp_tools.py             # WARP 设备管理脚本 (list/delete/cleanup)
 │   ├── sample_bash.sh            # 规范的 Bash 脚本模版
 │   ├── requirements.txt          # Python 依赖包列表
 │   └── dotnet/
@@ -84,6 +87,54 @@ runneraction/
     2.  安装 [requirements.txt](file:///home/ubuntu/document/github_org/runneraction/scripts/requirements.txt) 中的 Python 依赖包并将输出写入日志文件 `run.log`。
     3.  从 Vault 秘密路径 `/v1/kv/data/github` 读取并掩码解析 `GIT_PUSH_BOT` 和 `MY_TEL_ID`，相关日志写入 `run.log`。
     4.  将包含执行日志的 `run.log` 文本文件作为附件通过 Telegram 发送到指定的 chat_id。
+
+---
+
+## WARP 设备管理 (warp_tools)
+
+管理 Cloudflare Zero Trust WARP 设备：查看设备、按条件批量清理（如 `non_identity` 认证且长期不活跃的设备）。
+
+**凭据链路**：脚本从 **Upstash Redis** 读取 CF 1h 临时 token（由 Gitea Actions `gitea_cyh/gitea_action` 仓库的 `issue-cf-token` workflow 签发写入），零静态高权凭据。
+
+**所需 Secrets**（组织级，public 仓库生效）：
+| Secret | 说明 |
+|--------|------|
+| `UPSTASH_REST_URL` | Upstash REST 地址 |
+| `UPSTASH_REST_TOKEN_RO` | Upstash 只读 token |
+| `CF_ACCOUNT_ID` | Cloudflare 账户 ID |
+
+### 1. warp-tools-check.yml（只读检查）
+| Input | 说明 |
+|-------|------|
+| `action` | `list` 列出全部设备 / `preview` 预览将清理的 non_identity 不活跃设备 |
+| `hours` | 不活跃阈值小时数（preview 用，默认 6） |
+
+```bash
+gh workflow run warp-tools-check.yml --repo horacecuiorg/runneraction -f action=preview -f hours=6
+```
+
+### 2. warp-tools-delete.yml（删除，confirm 闸门）
+| Input | 说明 |
+|-------|------|
+| `action` | `single` 删单台（填 device_name）/ `cleanup` 批量清理 |
+| `device_name` | single 时必填 |
+| `hours` | cleanup 阈值（默认 6） |
+| `confirm` | 🔒 必须选 `yes` 才执行，否则中止 |
+
+```bash
+gh workflow run warp-tools-delete.yml --repo horacecuiorg/runneraction -f action=cleanup -f hours=6 -f confirm=yes
+```
+
+### 3. 脚本本地运行 (scripts/warp_tools.py)
+```bash
+export UPSTASH_REST_URL=... UPSTASH_REST_TOKEN_RO=... CF_ACCOUNT_ID=...
+python3 scripts/warp_tools.py list                                  # 列全部设备 (含认证 token 名 + WARP 虚拟 IP)
+python3 scripts/warp_tools.py delete <device_name>                  # 删单台
+python3 scripts/warp_tools.py cleanup 6 --dry-run                   # 预览命中 (默认 dry-run)
+python3 scripts/warp_tools.py cleanup 6 --apply                     # 实际执行清理
+```
+
+> ⚠️ token 1h 过期：若报 "Upstash 无有效 token"，需先手动触发 gitea_action 仓库的 `issue-cf-token` workflow 重新签发。
 
 ---
 
